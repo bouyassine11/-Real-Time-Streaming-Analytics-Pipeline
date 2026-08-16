@@ -1,0 +1,183 @@
+services:
+  # ==============================
+  # Zookeeper
+  # ==============================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: echo srvr | nc localhost 2181 || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kafka-network
+
+  # ==============================
+  # Kafka Broker
+  # ==============================
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    hostname: kafka
+    container_name: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+    healthcheck:
+      test: kafka-topics --bootstrap-server localhost:9092 --list || exit 1
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    networks:
+      - kafka-network
+
+  # ==============================
+  # PostgreSQL
+  # ==============================
+  postgres:
+    image: postgres:16-alpine
+    hostname: postgres
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: clickstream
+      POSTGRES_USER: clickstream_user
+      POSTGRES_PASSWORD: clickstream_pass
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: pg_isready -U clickstream_user -d clickstream
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kafka-network
+
+  # ==============================
+  # Spark Master
+  # ==============================
+  spark-master:
+    image: bitnami/spark:3.5
+    hostname: spark-master
+    container_name: spark-master
+    environment:
+      - SPARK_MODE=master
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    healthcheck:
+      test: curl -f http://localhost:8080 || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kafka-network
+
+  # ==============================
+  # Spark Worker
+  # ==============================
+  spark-worker:
+    image: bitnami/spark:3.5
+    hostname: spark-worker
+    container_name: spark-worker
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    networks:
+      - kafka-network
+
+  # ==============================
+  # Data Generator (Python Kafka Producer)
+  # ==============================
+  data-generator:
+    build:
+      context: ./data-generator
+      dockerfile: Dockerfile
+    container_name: data-generator
+    environment:
+      KAFKA_BROKER: kafka:29092
+      KAFKA_TOPIC: clickstream_events
+      EVENTS_PER_SECOND: 20
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - kafka-network
+
+  # ==============================
+  # Dashboard API (Express.js)
+  # ==============================
+  dashboard-api:
+    build:
+      context: ./dashboard/api
+      dockerfile: Dockerfile
+    container_name: dashboard-api
+    ports:
+      - "3001:3001"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: clickstream
+      POSTGRES_USER: clickstream_user
+      POSTGRES_PASSWORD: clickstream_pass
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - kafka-network
+
+  # ==============================
+  # Dashboard UI (React + Nginx)
+  # ==============================
+  dashboard-ui:
+    build:
+      context: ./dashboard/ui
+      dockerfile: Dockerfile
+    container_name: dashboard-ui
+    ports:
+      - "3000:80"
+    depends_on:
+      - dashboard-api
+    networks:
+      - kafka-network
+
+# ==============================
+# Volumes
+# ==============================
+volumes:
+  postgres-data:
+
+# ==============================
+# Networks
+# ==============================
+networks:
+  kafka-network:
+    driver: bridge
