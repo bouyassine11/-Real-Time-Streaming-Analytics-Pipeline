@@ -74,42 +74,25 @@ services:
       - kafka-network
 
   # ==============================
-  # Spark Master
+  # PySpark Streaming Job (local mode)
   # ==============================
-  spark-master:
-    image: bitnami/spark:3.5
-    hostname: spark-master
-    container_name: spark-master
+  spark-runner:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    container_name: spark-runner
     environment:
-      - SPARK_MODE=master
-      - SPARK_MASTER_HOST=spark-master
-      - SPARK_MASTER_PORT=7077
-      - SPARK_MASTER_WEBUI_PORT=8080
-    ports:
-      - "8080:8080"
-      - "7077:7077"
-    healthcheck:
-      test: curl -f http://localhost:8080 || exit 1
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - kafka-network
-
-  # ==============================
-  # Spark Worker
-  # ==============================
-  spark-worker:
-    image: bitnami/spark:3.5
-    hostname: spark-worker
-    container_name: spark-worker
-    environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_MEMORY=2G
-      - SPARK_WORKER_CORES=2
+      KAFKA_BROKER: kafka:29092
+      KAFKA_TOPIC: clickstream_events
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: clickstream
+      POSTGRES_USER: clickstream_user
+      POSTGRES_PASSWORD: clickstream_pass
     depends_on:
-      spark-master:
+      kafka:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     networks:
       - kafka-network
